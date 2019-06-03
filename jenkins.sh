@@ -1,6 +1,7 @@
 #!/bin/bash
 sudo yum -y install java-1.8.0-openjdk
-sudo wget -q --user "${USERNAME}" --password "${PASSWORD}" https://nexus.di2e.net/nexus/content/repositories/Private_AFDCGSCICD_Releases/content/repositories/Releases/CIE/jenkins/jenkins-2.156-1.1.noarch.rpm
-sudo rpm -i jenkins-2.156-1.1.noarch.rpm
+curl --silent --location http://pkg.jenkins-ci.org/redhat-stable/jenkins.repo | sudo tee /etc/yum.repos.d/jenkins.repo
+sudo rpm --import https://jenkins-ci.org/redhat/jenkins-ci.org.key
 sudo yum install jenkins
+sudo systemctl enable jenkins
 sudo systemctl start jenkins
