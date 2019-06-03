@@ -1,0 +1,149 @@
+---
+- hosts: k8nodes
+  become: true
+  tasks:
+  - name: Update and upgrade yum packages
+    become: true
+    yum:
+      name: '*'
+      state: latest
+
+  - name: Install prereq packages
+    yum:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - yum-utils
+      - device-mapper-persistent-data
+      - lvm2
+
+  - name: Add yum repository for stable version
+    yum_repository:
+      name: docker-repo
+      description: repository for docker install
+      baseurl: https://download.docker.com/linux/centos/7/$basearch/stable
+      enabled: 1
+      gpgcheck: 1
+      gpgkey: https://download.docker.com/linux/centos/gpg
+      state: present
+
+  - name: Install docker and its dependecies
+    yum: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - docker-ce 
+      - docker-ce-cli 
+      - containerd.io
+    notify:
+    - docker status
+
+  - name: Add vagrant user to docker group
+    user:
+      name: vagrant
+      group: docker
+
+  - name: Remove swapfile from /etc/fstab
+    mount:
+      name: "{{ item }}"
+      fstype: swap
+      state: absent
+    with_items:
+      - swap
+      - none
+
+  - name: Disable swap
+    command: swapoff -a
+    when: ansible_swaptotal_mb > 0
+
+    # Put SELinux in permissive mode, logging actions that would be blocked.
+  - selinux:
+      policy: targeted
+      state: permissive
+    register: set_selinux_permissive
+    tags: masters, workers
+    
+  - debug:
+      var: set_selinux_permissive 
+    tags: masters, workers
+
+  # Changing Selinux to be permissive across reboots
+  - lineinfile:
+      path: /etc/selinux/config
+      regexp: '^SELINUX=enforcing'
+      line: 'SELINUX=permissive'
+   
+
+  - name: k8 conf file
+    file:
+      path: /etc/sysctl.d/k8s.conf
+      mode: '0755'
+      state: touch
+
+  - name: Adding contents to k8s.conf
+    blockinfile:
+      path: /etc/sysctl.d/k8s.conf
+      block: |
+        net.bridge.bridge-nf-call-iptables = 1
+        net.bridge.bridge-nf-call-ip6tables = 1
+
+  - name: Start Docker service
+    systemd:
+      name: docker
+      state: started
+      enabled: yes
+    become: yes
+
+  - name: Adding yum repository for Kubernetes
+    yum_repository:
+      name: Kubernetes
+      baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+      description: Kubernetes repo
+      enabled: 1
+      gpgcheck: 1
+      repo_gpgcheck: 0
+      gpgkey: https://packages.cloud.google.com/yum/doc/yum-key.gpg
+        https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+
+  - name: Install Kubernetes binaries
+    yum: 
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+      - kubelet 
+      - kubeadm 
+      - kubectl
+
+  - name: Start kubelet service
+    systemd:
+      name: kubelet
+      state: started
+      enabled: yes
+    become: yes
+    
+
+  - name: Copy the join command to server location
+    copy: src=join-command dest=/tmp/join-command.sh mode=0777
+
+  - name: Join the node to cluster
+    command: sh /tmp/join-command.sh
+  
+  - name: Set max user watches
+    become: false
+    shell: echo fs.inotify.max_user_watches=524288 | sudo /usr/bin/tee -a /etc/sysctl.conf && sudo sysctl -p
+  
+  - name: Restart server
+    command: /sbin/shutdown -r +1
+    async: 0
+    poll: 0
+    ignore_errors: true
+
+  handlers:
+    - name: docker status
+      service: name=docker state=started
